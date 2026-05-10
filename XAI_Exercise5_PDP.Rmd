@@ -1,0 +1,198 @@
+---
+title: "XAI - Exercise 5: Partial Dependence Plots (PDP)"
+author: "Pablo Huguet"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: flatly
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                      fig.width = 11, fig.height = 7)
+```
+
+# Librerías
+
+```{r libraries}
+library(randomForest)
+library(pdp)
+library(ggplot2)
+library(dplyr)
+library(gridExtra)
+```
+
+---
+
+# Exercise 1 – 1D Partial Dependence Plot: Bike Rentals
+
+## Data & Model
+
+```{r bike-model}
+day <- read.csv("day.csv")
+
+# Features used for training
+features <- c("instant", "temp", "hum", "windspeed",
+               "season", "yr", "mnth", "holiday",
+               "weekday", "workingday", "weathersit", "atemp")
+
+set.seed(42)
+rf_bike <- randomForest(
+  x = day[, features],
+  y = day$cnt,
+  ntree = 200,
+  importance = TRUE
+)
+
+cat("R² =", round(1 - rf_bike$mse[200] / var(day$cnt), 4))
+```
+
+## PDP Plots
+
+```{r bike-pdp, fig.height=9}
+plot_pdp_bike <- function(feature, label) {
+  pd <- partial(rf_bike, pred.var = feature, train = day[, features], grid.resolution = 100)
+  ggplot(pd, aes_string(x = feature, y = "yhat")) +
+    geom_line(color = "#2166AC", linewidth = 1.2) +
+    geom_ribbon(aes(ymin = min(yhat), ymax = yhat), alpha = 0.12, fill = "#2166AC") +
+    geom_rug(data = day, aes_string(x = feature), sides = "b",
+             inherit.aes = FALSE, alpha = 0.3, color = "gray50") +
+    labs(title = paste("PDP –", label),
+         x = label, y = "Predicted bike count") +
+    theme_bw(base_size = 12) +
+    theme(plot.title = element_text(face = "bold"))
+}
+
+p1 <- plot_pdp_bike("instant",   "Days since 2011")
+p2 <- plot_pdp_bike("temp",      "Temperature (normalised)")
+p3 <- plot_pdp_bike("hum",       "Humidity (normalised)")
+p4 <- plot_pdp_bike("windspeed", "Wind Speed (normalised)")
+
+grid.arrange(p1, p2, p3, p4, ncol = 2,
+             top = "Exercise 1 – 1D PDP: Bike Rental Prediction")
+```
+
+## Analysis
+
+**Days since 2011:** Clear upward trend reflecting overall growth in bike sharing usage over time. The relationship is approximately linear, with a slight plateau toward the end, suggesting adoption was still growing but beginning to stabilize.
+
+**Temperature:** Strong positive effect up to ~0.6 (normalised, ≈20°C), after which the curve flattens and slightly decreases. Very high temperatures discourage cycling — an inverted-U pattern consistent with seasonal behaviour.
+
+**Humidity:** Clear negative relationship. As humidity rises above 0.6, predicted rentals drop noticeably. The effect becomes most pronounced above 0.8, suggesting non-linear sensitivity to discomfort.
+
+**Wind Speed:** Moderate negative effect across the observed range. High wind conditions make cycling physically harder, particularly for casual riders.
+
+---
+
+# Exercise 2 – 2D Partial Dependence Plot: Humidity × Temperature
+
+## 2D PDP
+
+```{r 2d-pdp, fig.height=7}
+set.seed(42)
+sample_day <- day %>% sample_n(300)
+
+pd_2d <- partial(rf_bike,
+                 pred.var = c("hum", "temp"),
+                 train = sample_day[, features],
+                 grid.resolution = 40)
+
+# Main 2D tile plot
+main_plot <- ggplot(pd_2d, aes(x = hum, y = temp, fill = yhat)) +
+  geom_tile(width = 0.025, height = 0.025) +
+  scale_fill_distiller(palette = "RdYlBu", direction = -1,
+                       name = "Predicted\nbike count") +
+  labs(title = "2D PDP – Humidity × Temperature",
+       x = "Humidity (normalised)", y = "Temperature (normalised)") +
+  theme_bw(base_size = 12) +
+  theme(plot.title = element_text(face = "bold"))
+
+# Density plots for context
+top_hist <- ggplot(day, aes(x = hum)) +
+  geom_histogram(fill = "#2166AC", alpha = 0.7, bins = 30) +
+  labs(title = "Humidity distribution", x = NULL, y = "Count") +
+  theme_bw(base_size = 10)
+
+right_hist <- ggplot(day, aes(x = temp)) +
+  geom_histogram(fill = "#D6604D", alpha = 0.7, bins = 30) +
+  coord_flip() +
+  labs(title = "Temp distribution", x = NULL, y = "Count") +
+  theme_bw(base_size = 10)
+
+grid.arrange(top_hist, right_hist, main_plot,
+             layout_matrix = rbind(c(1, 2), c(3, 3)),
+             heights = c(1, 3))
+```
+
+## Interpretation
+
+The 2D PDP reveals an important interaction between temperature and humidity. **Highest predicted rentals** are concentrated in moderate-to-high temperature (0.4–0.7) combined with low-to-moderate humidity (0.2–0.6) — pleasant cycling conditions.
+
+Both the bottom-right region (low temperature, high humidity) and top-right (high temperature, high humidity) show suppressed demand. Temperature is the dominant factor: even at high humidity, moderate temperatures maintain reasonable predicted counts.
+
+The density plots confirm data is concentrated in moderate ranges, so predictions in extreme corners should be interpreted cautiously.
+
+---
+
+# Exercise 3 – 1D PDP: House Price Prediction
+
+## Data & Model
+
+```{r house-model}
+kc <- read.csv("kc_house_data.csv")
+
+features_house <- c("bedrooms", "bathrooms", "sqft_living",
+                    "sqft_lot", "floors", "yr_built")
+
+set.seed(42)
+kc_sample <- kc %>% sample_n(3000)
+
+rf_house <- randomForest(
+  x = kc_sample[, features_house],
+  y = kc_sample$price,
+  ntree = 200
+)
+
+cat("R² =", round(1 - rf_house$mse[200] / var(kc_sample$price), 4))
+```
+
+## PDP Plots
+
+```{r house-pdp, fig.height=9}
+plot_pdp_house <- function(feature, label) {
+  pd <- partial(rf_house, pred.var = feature,
+                train = kc_sample[, features_house], grid.resolution = 80)
+  pd$yhat_k <- pd$yhat / 1000
+
+  ggplot(pd, aes_string(x = feature, y = "yhat_k")) +
+    geom_line(color = "#4DAC26", linewidth = 1.2) +
+    geom_ribbon(aes(ymin = min(yhat_k), ymax = yhat_k),
+                alpha = 0.12, fill = "#4DAC26") +
+    geom_rug(data = kc_sample, aes_string(x = feature), sides = "b",
+             inherit.aes = FALSE, alpha = 0.2, color = "gray50") +
+    labs(title = paste("PDP –", label),
+         x = label, y = "Predicted price (k$)") +
+    theme_bw(base_size = 12) +
+    theme(plot.title = element_text(face = "bold"))
+}
+
+p1h <- plot_pdp_house("bedrooms",    "Bedrooms")
+p2h <- plot_pdp_house("bathrooms",   "Bathrooms")
+p3h <- plot_pdp_house("sqft_living", "Living Area (sqft)")
+p4h <- plot_pdp_house("floors",      "Floors")
+
+grid.arrange(p1h, p2h, p3h, p4h, ncol = 2,
+             top = "Exercise 3 – 1D PDP: House Price Prediction (King County)")
+```
+
+## Analysis
+
+**Bedrooms:** Non-monotonic relationship — price increases up to 3–4 bedrooms then levels off or slightly decreases. Houses with many bedrooms tend to have smaller individual rooms and lower quality relative to mid-sized luxury properties.
+
+**Bathrooms:** Stronger positive relationship than bedrooms, rising steadily up to 3–4 bathrooms. More bathrooms are associated with larger, higher-quality homes, with diminishing returns at high counts.
+
+**Living Area (sqft_living):** The most pronounced positive effect. Strongly positive and approximately linear, steepening at higher values — large luxury properties carry a premium beyond the simple size effect.
+
+**Floors:** Moderate positive effect. Two-storey homes command higher prices than single-storey, reflecting larger total area and design preferences. Slight uncertainty at 3+ floors due to limited observations.
